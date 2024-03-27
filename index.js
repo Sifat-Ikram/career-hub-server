@@ -29,7 +29,7 @@ const verifyToken = (req, res, next) => {
   });
 };
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.jrqljyn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -48,6 +48,102 @@ async function run() {
 
     const jobCollection = client.db("careerHub").collection("jobs");
     const categoryCollection = client.db("careerHub").collection("category");
+    const userCollection = client.db("careerHub").collection("user");
+    const cartCollection = client.db("careerHub").collection("cart");
+
+
+    // middleware again
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      const isAdmin = user?.role === "admin";
+      if (!isAdmin) {
+        return res.status(403).send({ message: "Access forbidden" });
+      }
+      next();
+    };
+
+    // jwt api
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      const token = await jwt.sign(user, process.env.SECRET_TOKEN, {
+        expiresIn: "1h",
+      });
+      res.send({ token });
+    });
+
+    
+    // user api
+    app.post("/user", async (req, res) => {
+      const user = req.body;
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+    app.get("/user", async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.get("/user/admin/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: "Access Unauthorized" });
+      }
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      let admin = false;
+      if (user) {
+        admin = user?.role === "admin";
+      }
+      res.send({ admin });
+    });
+
+    app.patch("/user/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          role: "admin",
+        },
+      };
+      const result = await userCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+    app.patch("/user/:id", async (req, res) => {
+      const item = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const options = { upsert: true };
+      const updatedDoc = {
+        $set: {
+          name: item.name,
+          email: item.email,
+          photoUrl: photoUrl,
+          gender: item.gender,
+          address: item.address,
+          birthdate: item.birthdate,
+          role: item.role,
+        },
+      };
+
+      const result = await userCollection.updateOne(
+        filter,
+        updatedDoc,
+        options
+      );
+      res.send(result);
+    });
+
+    app.delete("/user/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await userCollection.deleteOne(query);
+      res.send(result);
+    });
+
 
     // job api
     app.get("/job", async (req, res) => {
@@ -58,6 +154,33 @@ async function run() {
     app.post("/job", async (req, res) => {
       const jobItem = req.body;
       const result = await jobCollection.insertOne(jobItem);
+      res.send(result);
+    });
+    
+
+    //   cart api
+    app.post("/cart", async (req, res) => {
+      const bookingItem = req.body;
+      const result = await cartCollection.insertOne(bookingItem);
+      res.send(result);
+    });
+    app.get("/cart", async (req, res) => {
+      const email = req.query.email;
+      const admin = req.query.admin;
+      let query = {};
+
+      if (email) {
+        query.email = email;
+      } else if (admin) {
+        query.admin = admin;
+      }
+      const result = await cartCollection.find(query).toArray();
+      res.send(result);
+    });
+    app.delete("/cart/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await cartCollection.deleteOne(query);
       res.send(result);
     });
 
