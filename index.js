@@ -2,17 +2,33 @@ const express = require("express");
 const app = express();
 require("dotenv").config();
 const cors = require("cors");
-const port = process.env.PORT || 4321;
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
+const port = process.env.POST || 4321;
 
 // middleware
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://career-hub-web.web.app"],
+    origin: [
+      "http://localhost:5173",
+      "https://career-hub-web.web.app",
+      "https://career-hub-web.firebaseapp.com",
+    ],
     credentials: true,
   })
 );
 app.use(express.json());
+
+// app.use((req, res, next) => {
+//   res.setHeader("Access-Control-Allow-Origin", "http://localhost:5173");
+//   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
+//   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+//   next();
+// });
+
+// multer setup
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 const verifyToken = (req, res, next) => {
   // console.log("inside middleware", req.headers.authorization);
@@ -44,16 +60,20 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const jobCollection = client.db("careerHub").collection("jobs");
     const categoryCollection = client.db("careerHub").collection("category");
     const userCollection = client.db("careerHub").collection("user");
     const cartCollection = client.db("careerHub").collection("cart");
-
+    const resumeCollection = client.db("careerHub").collection("resume");
+    const categoriesCollection = client
+      .db("careerHub")
+      .collection("categories");
+    const reviewCollection = client.db("careerHub").collection("review");
+    const shortlistCollection = client.db("careerHub").collection("shortlist");
 
     // middleware again
-
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
       const query = { email: email };
@@ -74,7 +94,6 @@ async function run() {
       res.send({ token });
     });
 
-    
     // user api
     app.post("/user", async (req, res) => {
       const user = req.body;
@@ -84,6 +103,21 @@ async function run() {
     app.get("/user", async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
+    });
+
+    app.get("/user", async (req, res) => {
+      const email = req.query.email;
+      let query = {};
+
+      if (email) {
+        query.email = email;
+      }
+      const user = await userCollection.findOne(query);
+      let employer = false;
+      if (user) {
+        employer = user?.role === "employer";
+      }
+      res.send({ employer });
     });
 
     app.get("/user/admin/:email", verifyToken, async (req, res) => {
@@ -119,12 +153,14 @@ async function run() {
       const options = { upsert: true };
       const updatedDoc = {
         $set: {
-          name: item.name,
+          displayName: item.displayName,
           email: item.email,
           photoUrl: photoUrl,
-          gender: item.gender,
-          address: item.address,
-          birthdate: item.birthdate,
+          phoneNumber: item.phoneNumber,
+          location: item.location,
+          facebook: item.facebook,
+          linkedin: item.linkedin,
+          professionalSummary: item.professionalSummary,
           role: item.role,
         },
       };
@@ -144,6 +180,9 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/favicon.ico", (req, res) => {
+      res.status(204); // No Content
+    });
 
     // job api
     app.get("/job", async (req, res) => {
@@ -156,14 +195,82 @@ async function run() {
       const result = await jobCollection.insertOne(jobItem);
       res.send(result);
     });
-    
 
-    //   cart api
+    // resume api
+    app.post("/resume", upload.single("pdf"), async (req, res) => {
+      try {
+        const { email } = req.body; // Extract email from request body
+        const pdfData = req.file.buffer;
+
+        // Insert email and pdfData into MongoDB
+        const result = await resumeCollection.insertOne({
+          email,
+          pdf: pdfData,
+        });
+
+        res.status(201).json({
+          message: "Resume uploaded successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error uploading resume:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    app.get("/resume", async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        // Find all resume documents by email
+        const resumes = await resumeCollection.find({ email }).toArray();
+
+        // Check if any resumes exist for the given email
+        if (!resumes || resumes.length === 0) {
+          return res
+            .status(404)
+            .json({ error: "No resumes found for this email" });
+        }
+
+        // Send all resume files as a response
+        const resumeData = resumes.map((resume) => resume.pdf);
+        res.setHeader("Content-Type", "application/pdf");
+        res.send(resumeData);
+      } catch (error) {
+        console.error("Error retrieving resumes:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    app.delete("/resume/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        // Delete the resume document by its ID
+        const result = await resumeCollection.deleteOne({ _id: ObjectId(id) });
+
+        // Check if any resume was deleted
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ error: "Resume not found" });
+        }
+
+        res.status(200).json({ message: "Resume deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting resume:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+
+    // cart api
     app.post("/cart", async (req, res) => {
       const bookingItem = req.body;
       const result = await cartCollection.insertOne(bookingItem);
       res.send(result);
     });
+
+    app.get("/cart", async (req, res) => {
+      const result = await cartCollection.find().toArray();
+      res.send(result);
+    });
+
     app.get("/cart", async (req, res) => {
       const email = req.query.email;
       const admin = req.query.admin;
@@ -171,12 +278,15 @@ async function run() {
 
       if (email) {
         query.email = email;
-      } else if (admin) {
+      }
+      if (admin) {
         query.admin = admin;
       }
+
       const result = await cartCollection.find(query).toArray();
       res.send(result);
     });
+
     app.delete("/cart/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -186,9 +296,46 @@ async function run() {
 
     // category api
     app.get("/category", async (req, res) => {
-        const result = await categoryCollection.find().toArray();
-        res.send(result);
-      });
+      const result = await categoryCollection.find().toArray();
+      res.send(result);
+    });
+
+    // categories api
+    app.get("/categories", async (req, res) => {
+      const result = await categoriesCollection.find().toArray();
+      res.send(result);
+    });
+
+    // review api
+    app.post("/review", async (req, res) => {
+      const reviewItem = req.body;
+      const result = await reviewCollection.insertOne(reviewItem);
+      res.send(result);
+    });
+
+    app.get("/review", async (req, res) => {
+      const result = await reviewCollection.find().toArray();
+      res.send(result);
+    });
+
+    // shortlist api
+    app.post("/shortlist", async (req, res) => {
+      const shortlistItem = req.body;
+      const result = await shortlistCollection.insertOne(shortlistItem);
+      res.send(result);
+    });
+
+    app.get("/shortlist", async (req, res) => {
+      const result = await shortlistCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.delete("/shortlist/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await shortlistCollection.deleteOne(query);
+      res.send(result);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
@@ -203,9 +350,9 @@ async function run() {
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("career hub is running");
+  res.send("career hub is recruiting");
 });
 
 app.listen(port, () => {
-  console.log(`career hub server is running through port ${port}`);
+  console.log(`career hub server is recruiting through port ${port}`);
 });
